@@ -1,0 +1,25 @@
+node_modules
+out
+release
+*.log
+
+# ---------- 个人数据：严禁提交 ----------
+# 数据库
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+# 导出的备份（含明文密码）
+devvault-backup-*.json
+DevVault备份-*/
+data.json
+# 附件、用户数据目录
+attachments/
+userdata/
+# 环境变量 / 密钥
+.env
+.env.*
+*.pem
+*.key
+*.ovpn
