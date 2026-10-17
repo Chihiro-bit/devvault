@@ -225,13 +225,41 @@ export interface UnlockResult {
 export interface CloudUser {
   id: string
   name: string
+  /** 登录名 */
+  username: string
   email?: string
+}
+
+export interface SyncStatus {
+  syncing: boolean
+  /** 最近一次成功同步的时间（ISO 字符串） */
+  lastSyncAt: string | null
+  /** 最近一次同步失败的原因，成功后清空 */
+  error: string | null
+  /** 本机尚未上传的修改数 */
+  pending: number
 }
 
 export interface CloudState {
   serverUrl: string
   user: CloudUser | null
   loggedIn: boolean
+  sync: SyncStatus
+}
+
+export interface ServerInfo {
+  name: string
+  version: string
+  apiVersion: number
+  allowRegistration: boolean
+}
+
+export interface RegisterInput {
+  serverUrl: string
+  username: string
+  password: string
+  name?: string
+  email?: string
 }
 
 /** 应用偏好（托盘、快速搜索、提醒） */

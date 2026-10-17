@@ -7,6 +7,7 @@ import { applyHotkey, createTray } from './tray'
 import { startReminders } from './reminders'
 import { initLock } from './lock'
 import { gcAttachments } from './attachments'
+import { initSync } from './sync'
 
 // 日期选择器等原生控件使用中文格式
 app.commandLine.appendSwitch('lang', 'zh-CN')
@@ -27,6 +28,7 @@ if (!app.requestSingleInstanceLock()) {
     createTray()
     applyHotkey()
     startReminders()
+    initSync()
     gcAttachments().catch(() => undefined)
     app.on('activate', () => showMainWindow())
   })

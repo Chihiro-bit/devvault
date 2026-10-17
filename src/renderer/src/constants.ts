@@ -200,3 +200,9 @@ export function addDays(date: string, n: number): string {
   d.setDate(d.getDate() + n)
   return d.toLocaleDateString('sv')
 }
+
+/**
+ * 统一提供的云同步服务器地址。填写后登录页会显示「使用官方服务器」按钮；
+ * 留空则只能手动填写（自建服务器见服务端项目 dev-vault-server）。
+ */
+export const OFFICIAL_SERVER_URL: string = ''

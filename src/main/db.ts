@@ -138,8 +138,90 @@ ALTER TABLE todos   ADD COLUMN remind_at  TEXT NOT NULL DEFAULT '';
 ALTER TABLE todos   ADD COLUMN reminded   INTEGER NOT NULL DEFAULT 0;
 `
 
+/**
+ * 参与云同步的表及其同步类型、需要同步的列。
+ * 只有这些列的修改会标记为待同步；桌面任务条位置、提醒是否已发送等属于本机状态，不同步。
+ * 附件文件体积较大，暂不同步。
+ */
+export const SYNC_TABLES = [
+  { table: 'priorities', kind: 'priority', cols: ['label', 'name', 'color', 'sort_order', 'is_default'] },
+  { table: 'statuses', kind: 'status', cols: ['name', 'color', 'kind', 'sort_order'] },
+  { table: 'projects', kind: 'project', cols: ['name', 'color', 'description', 'sort_order'] },
+  {
+    table: 'entries',
+    kind: 'entry',
+    cols: ['project_id', 'category', 'title', 'env', 'url', 'username', 'password', 'verify_code', 'totp', 'expires_at',
+      'notes', 'tags', 'extra', 'favorite']
+  },
+  {
+    table: 'todos',
+    kind: 'todo',
+    cols: ['project_id', 'parent_id', 'title', 'notes', 'priority', 'status_id', 'done', 'done_at', 'start_date',
+      'due_date', 'remind_at', 'tags', 'repeat']
+  },
+  { table: 'todo_comments', kind: 'comment', cols: ['content'] }
+] as const
+
+export type SyncKind = (typeof SYNC_TABLES)[number]['kind']
+
+/** 当前时间（毫秒时间戳） */
+export const NOW_MS = `CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`
+
+/** sync_apply 表中有行时表示正在写入云端拉取的数据，此时触发器不再标记待同步 */
+const NOT_APPLYING = `NOT EXISTS (SELECT 1 FROM sync_apply)`
+
+// v7：云同步。每条记录分配全局唯一的 uid，用触发器记录本地修改（sync_dirty）和删除（sync_tombstones）
+const SCHEMA_V7 = [
+  `CREATE TABLE IF NOT EXISTS sync_apply (x INTEGER);`,
+  `CREATE TABLE IF NOT EXISTS sync_tombstones (
+    kind  TEXT NOT NULL,
+    uid   TEXT NOT NULL,
+    rev   INTEGER NOT NULL DEFAULT 0,
+    mtime INTEGER NOT NULL,
+    PRIMARY KEY (kind, uid)
+  );`,
+  ...SYNC_TABLES.map(
+    ({ table, kind, cols }) => `
+    ALTER TABLE ${table} ADD COLUMN uid        TEXT;
+    ALTER TABLE ${table} ADD COLUMN sync_rev   INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE ${table} ADD COLUMN sync_dirty INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE ${table} ADD COLUMN sync_mtime INTEGER NOT NULL DEFAULT 0;
+    UPDATE ${table} SET uid = lower(hex(randomblob(16))), sync_dirty = 1, sync_mtime = ${NOW_MS};
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${table}_uid ON ${table}(uid);
+
+    CREATE TRIGGER trg_${table}_sync_ins AFTER INSERT ON ${table} WHEN ${NOT_APPLYING}
+    BEGIN
+      UPDATE ${table} SET uid = COALESCE(uid, lower(hex(randomblob(16)))), sync_dirty = 1, sync_mtime = ${NOW_MS}
+      WHERE id = NEW.id;
+    END;
+
+    CREATE TRIGGER trg_${table}_sync_upd AFTER UPDATE OF ${cols.join(', ')} ON ${table} WHEN ${NOT_APPLYING}
+    BEGIN
+      UPDATE ${table} SET sync_dirty = 1, sync_mtime = ${NOW_MS} WHERE id = NEW.id;
+    END;
+
+    -- 已同步过的记录，或已绑定云端账号后的删除，都需要通知服务端
+    CREATE TRIGGER trg_${table}_sync_del AFTER DELETE ON ${table}
+    WHEN OLD.uid IS NOT NULL AND ${NOT_APPLYING}
+      AND (OLD.sync_rev > 0 OR EXISTS (SELECT 1 FROM settings WHERE key = 'sync.account'))
+    BEGIN
+      INSERT OR REPLACE INTO sync_tombstones (kind, uid, rev, mtime) VALUES ('${kind}', OLD.uid, OLD.sync_rev, ${NOW_MS});
+    END;`
+  ),
+  // 内置的默认优先级和状态在每台设备上 id 相同，使用固定 uid，避免同步后出现重复的 P0~P3。
+  // 修改时间记为 1：多台设备都未修改过时，以最先同步的设备为准
+  ...(['priority', 'status'] as const).map((kind) => {
+    const table = kind === 'priority' ? 'priorities' : 'statuses'
+    return `
+    UPDATE ${table} SET uid = '${kind}-' || id, sync_mtime = 1 WHERE id BETWEEN 1 AND 4;
+    INSERT INTO sync_tombstones (kind, uid, rev, mtime)
+      SELECT '${kind}', '${kind}-' || n, 0, 1 FROM (SELECT 1 AS n UNION SELECT 2 UNION SELECT 3 UNION SELECT 4)
+      WHERE n NOT IN (SELECT id FROM ${table});`
+  })
+].join('\n')
+
 /** 按 user_version 顺序执行迁移，后续版本在数组末尾追加即可 */
-const MIGRATIONS: string[] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6]
+const MIGRATIONS: string[] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7]
 
 export function dbPath(): string {
   return join(app.getPath('userData'), 'devvault.db')

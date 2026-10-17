@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
-import type { AppInfo, AppPrefs, CloudState, LockState } from '../../../shared/types'
+import type { AppInfo, AppPrefs, CloudState, LockState, ServerInfo, SyncStatus } from '../../../shared/types'
+import { OFFICIAL_SERVER_URL } from '../constants'
 import { Icon } from './Icon'
 import { confirmDialog, errText, toast } from './ui'
 
@@ -11,11 +12,11 @@ const IDLE_PRESETS = [
   { s: 1800, label: '30 分钟' }
 ]
 
-/** 规划中的云端功能，登录后才可使用 */
+/** 云端功能，登录后才可使用 */
 const CLOUD_FEATURES = [
-  { title: '多设备同步', desc: '账号、待办在多台电脑间自动同步' },
-  { title: '团队共享', desc: '与同事共享项目的测试账号和环境信息' },
-  { title: '云端备份', desc: '定期加密备份到服务器，随时恢复' }
+  { title: '多设备同步', desc: '账号密码、待办在多台电脑间自动同步（附件暂不同步）', ready: true },
+  { title: '团队共享', desc: '与同事共享项目的测试账号和环境信息', ready: false },
+  { title: '云端备份', desc: '定期加密备份到服务器，随时恢复', ready: false }
 ]
 
 interface Props {
@@ -107,23 +108,62 @@ function Switch({ on, disabled, onChange }: { on: boolean; disabled?: boolean; o
 
 // ---------- 账号与云端 ----------
 
+function syncText(s: SyncStatus): string {
+  if (s.syncing) return '正在同步…'
+  if (s.error) return `同步失败：${s.error}`
+  const pending = s.pending ? ` · ${s.pending} 项修改待上传` : ''
+  if (!s.lastSyncAt) return `尚未同步${pending}`
+  const t = new Date(s.lastSyncAt)
+  const min = Math.floor((Date.now() - t.getTime()) / 60_000)
+  const when = min < 1 ? '刚刚' : min < 60 ? `${min} 分钟前` : t.toLocaleString('zh-CN', { hour12: false }).slice(0, -3)
+  return `上次同步：${when}${pending}`
+}
+
+type CloudMode = 'login' | 'register'
+
 function CloudSection({ cloud }: { cloud: CloudState | null }) {
+  const [mode, setMode] = useState<CloudMode>('login')
   const [server, setServer] = useState('')
+  const [info, setInfo] = useState<{ url: string; info: ServerInfo } | null>(null)
   const [username, setUsername] = useState('')
+  const [name, setName] = useState('')
   const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (cloud?.serverUrl) setServer((s) => s || cloud.serverUrl)
   }, [cloud?.serverUrl])
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
+  const checkServer = async () => {
     setBusy(true)
     try {
-      const s = await window.api.login(server, username, password)
+      const i = await window.api.serverInfo(server)
+      setInfo({ url: server, info: i })
+      toast(`已连接「${i.name}」${i.allowRegistration ? '' : '，该服务器未开放注册'}`)
+    } catch (err) {
+      setInfo(null)
+      toast(errText(err), 'err')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (mode === 'register') {
+      if (password.length < 8) return toast('主密码至少 8 位', 'err')
+      if (password !== confirm) return toast('两次输入的主密码不一致', 'err')
+    }
+    setBusy(true)
+    try {
+      const s =
+        mode === 'login'
+          ? await window.api.login(server, username, password)
+          : await window.api.register({ serverUrl: server, username, password, name })
       setPassword('')
-      toast(`登录成功，欢迎 ${s.user?.name}`)
+      setConfirm('')
+      toast(mode === 'login' ? `登录成功，欢迎 ${s.user?.name}` : '注册成功，本机数据将开始同步')
     } catch (err) {
       toast(errText(err), 'err')
     } finally {
@@ -132,52 +172,117 @@ function CloudSection({ cloud }: { cloud: CloudState | null }) {
   }
 
   const logout = async () => {
-    if (!(await confirmDialog('退出后云端功能将不可用，本地数据不受影响。', { title: '退出登录', okText: '退出', danger: false })))
-      return
+    const ok = await confirmDialog('退出后停止同步，本机数据不受影响；重新登录同一账号会继续同步。', {
+      title: '退出登录',
+      okText: '退出',
+      danger: false
+    })
+    if (!ok) return
     await window.api.logout()
     toast('已退出登录')
   }
 
   const loggedIn = !!cloud?.loggedIn
+  const serverInfo = info?.url === server ? info.info : null
+  const canSubmit = !busy && !!server.trim() && !!username.trim() && !!password && (mode === 'login' || !!confirm)
 
   return (
     <Section
       icon="cloud"
-      title="账号与云端"
-      desc={loggedIn ? '已连接服务器，云端功能可用' : '当前为本地模式：所有功能均可离线使用，数据只保存在本机'}
+      title="账号与云同步"
+      desc={
+        loggedIn
+          ? '账号密码与待办在本机加密后同步，服务器只保存密文'
+          : '当前为本地模式：所有功能均可离线使用。登录后可在多台电脑间同步，服务器可使用统一提供的，也可自行部署'
+      }
     >
       {loggedIn && cloud?.user ? (
-        <div className="account">
-          <span className="avatar lg">{cloud.user.name.slice(0, 1).toUpperCase()}</span>
-          <div className="account-info">
-            <div className="account-name">{cloud.user.name}</div>
-            <small>
-              {cloud.user.email ? `${cloud.user.email} · ` : ''}
-              {cloud.serverUrl}
-            </small>
+        <>
+          <div className="account">
+            <span className="avatar lg">{cloud.user.name.slice(0, 1).toUpperCase()}</span>
+            <div className="account-info">
+              <div className="account-name">{cloud.user.name}</div>
+              <small>
+                {cloud.user.username}
+                {cloud.user.email ? ` · ${cloud.user.email}` : ''} · {cloud.serverUrl}
+              </small>
+            </div>
+            <button className="btn" onClick={logout}>
+              <Icon name="logout" size={14} /> 退出登录
+            </button>
           </div>
-          <button className="btn" onClick={logout}>
-            <Icon name="logout" size={14} /> 退出登录
-          </button>
-        </div>
+          <SyncRow cloud={cloud} />
+          <MasterPasswordRow />
+        </>
       ) : (
         <form className="login-form" onSubmit={submit}>
+          <div className="segmented small full">
+            <button type="button" className={mode === 'login' ? 'on' : ''} onClick={() => setMode('login')}>
+              登录
+            </button>
+            <button type="button" className={mode === 'register' ? 'on' : ''} onClick={() => setMode('register')}>
+              注册
+            </button>
+          </div>
           <label className="field full">
             <span>服务器地址</span>
-            <input className="mono" value={server} placeholder="https://devvault.your-company.com" onChange={(e) => setServer(e.target.value)} />
+            <div className="input-with-btn">
+              <input
+                className="mono"
+                value={server}
+                placeholder={OFFICIAL_SERVER_URL || 'https://devvault.your-company.com'}
+                onChange={(e) => setServer(e.target.value)}
+              />
+              {OFFICIAL_SERVER_URL && server !== OFFICIAL_SERVER_URL && (
+                <button type="button" className="btn ghost" onClick={() => setServer(OFFICIAL_SERVER_URL)}>
+                  使用官方服务器
+                </button>
+              )}
+              <button type="button" className="btn" disabled={busy || !server.trim()} onClick={checkServer}>
+                测试连接
+              </button>
+            </div>
+            {serverInfo && (
+              <small className="field-hint">
+                {serverInfo.name} · v{serverInfo.version} · {serverInfo.allowRegistration ? '开放注册' : '未开放注册'}
+              </small>
+            )}
           </label>
           <label className="field">
             <span>账号</span>
             <input value={username} autoComplete="username" onChange={(e) => setUsername(e.target.value)} />
           </label>
-          <label className="field">
-            <span>密码</span>
-            <input type="password" value={password} autoComplete="current-password" onChange={(e) => setPassword(e.target.value)} />
-          </label>
+          {mode === 'register' ? (
+            <label className="field">
+              <span>显示名称（可选）</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+          ) : (
+            <label className="field">
+              <span>主密码</span>
+              <input type="password" value={password} autoComplete="current-password" onChange={(e) => setPassword(e.target.value)} />
+            </label>
+          )}
+          {mode === 'register' && (
+            <>
+              <label className="field">
+                <span>主密码（至少 8 位）</span>
+                <input type="password" value={password} autoComplete="new-password" onChange={(e) => setPassword(e.target.value)} />
+              </label>
+              <label className="field">
+                <span>确认主密码</span>
+                <input type="password" value={confirm} autoComplete="new-password" onChange={(e) => setConfirm(e.target.value)} />
+              </label>
+            </>
+          )}
           <div className="login-foot">
-            <small>服务端部署后填写地址即可登录；未登录不影响本地功能</small>
-            <button className="btn primary" disabled={busy || !server.trim() || !username.trim() || !password}>
-              {busy ? '登录中…' : '登录'}
+            {mode === 'register' ? (
+              <small className="pwd-tip">主密码用于加密你的数据，服务器无法查看也无法找回；忘记后云端数据将无法解密</small>
+            ) : (
+              <small>主密码不会发送到服务器；未登录不影响本地功能</small>
+            )}
+            <button className="btn primary" disabled={!canSubmit}>
+              {busy ? '请稍候…' : mode === 'login' ? '登录' : '注册并同步'}
             </button>
           </div>
         </form>
@@ -188,13 +293,93 @@ function CloudSection({ cloud }: { cloud: CloudState | null }) {
           <div className={`feature ${loggedIn ? '' : 'locked'}`} key={f.title}>
             <div className="feature-title">
               {f.title}
-              <span className="tag">{loggedIn ? '开发中' : '登录后可用'}</span>
+              <span className="tag">{!loggedIn ? '登录后可用' : f.ready ? '已启用' : '开发中'}</span>
             </div>
             <small>{f.desc}</small>
           </div>
         ))}
       </div>
     </Section>
+  )
+}
+
+function SyncRow({ cloud }: { cloud: CloudState }) {
+  const s = cloud.sync
+  const syncNow = async () => {
+    try {
+      const r = await window.api.syncNow()
+      if (r.sync.error) toast(r.sync.error, 'err')
+      else toast('同步完成')
+    } catch (err) {
+      toast(errText(err), 'err')
+    }
+  }
+  return (
+    <Row label="云同步" hint={<span className={s.error ? 'text-danger' : undefined}>{syncText(s)}</span>}>
+      <div className="row-actions">
+        <span className="status-pill ok">
+          <Icon name="shield" size={12} /> 端到端加密
+        </span>
+        <button className="btn" disabled={s.syncing} onClick={syncNow}>
+          <Icon name="refresh" size={14} /> {s.syncing ? '同步中…' : '立即同步'}
+        </button>
+      </div>
+    </Row>
+  )
+}
+
+function MasterPasswordRow() {
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const toggle = (v: boolean) => {
+    setOpen(v)
+    setCurrent('')
+    setNext('')
+    setConfirm('')
+  }
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (next.length < 8) return toast('主密码至少 8 位', 'err')
+    if (next !== confirm) return toast('两次输入的主密码不一致', 'err')
+    setBusy(true)
+    try {
+      await window.api.changeCloudPassword(current, next)
+      toast('主密码已修改，其他设备需重新登录')
+      toggle(false)
+    } catch (err) {
+      toast(errText(err), 'err')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <Row label="主密码" hint="修改后其他设备需要用新密码重新登录，已同步的数据无需重新上传">
+        <button className="btn" onClick={() => toggle(!open)}>
+          <Icon name="key" size={14} /> 修改
+        </button>
+      </Row>
+      {open && (
+        <form className="pwd-form" onSubmit={submit}>
+          <input autoFocus type="password" placeholder="当前主密码" value={current} onChange={(e) => setCurrent(e.target.value)} />
+          <input type="password" placeholder="新主密码（至少 8 位）" value={next} onChange={(e) => setNext(e.target.value)} />
+          <input type="password" placeholder="再次输入新主密码" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          <button className="btn primary" disabled={busy || !current || !next}>
+            {busy ? '请稍候…' : '保存'}
+          </button>
+          <button type="button" className="btn ghost" onClick={() => toggle(false)}>
+            取消
+          </button>
+          <small className="pwd-tip">主密码无法找回，请牢记</small>
+        </form>
+      )}
+    </>
   )
 }
 

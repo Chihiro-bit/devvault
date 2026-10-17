@@ -1681,6 +1681,29 @@ kbd {
   font-size: 12px;
   color: var(--muted);
 }
+.login-foot .pwd-tip {
+  width: auto;
+  color: var(--warn);
+}
+.login-form .segmented.full {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-width: 200px;
+}
+.input-with-btn {
+  display: flex;
+  gap: 8px;
+}
+.input-with-btn input {
+  flex: 1;
+}
+.field-hint {
+  font-size: 12px;
+  color: var(--ok);
+}
+.text-danger {
+  color: var(--danger);
+}
 
 .features {
   display: grid;

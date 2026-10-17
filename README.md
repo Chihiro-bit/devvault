@@ -10,6 +10,7 @@
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-better--sqlite3-003B57?logo=sqlite&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Server-Kotlin%20%2B%20Ktor-7F52FF?logo=kotlin&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 
 </div>
@@ -18,7 +19,7 @@
 
 日常开发里总有一堆零碎信息：各环境的测试账号、固定的短信验证码、公司 GitLab 的 Token、IT 发的 VPN 客户端和动态码、跳板机地址……散落在聊天记录、便签和浏览器里，用的时候到处翻。
 
-DevVault 把它们按项目整理在一起，配上一个够用的待办系统。所有数据保存在本机，不需要注册账号，也不依赖网络。
+DevVault 把它们按项目整理在一起，配上一个够用的待办系统。默认所有数据保存在本机，不需要注册账号，也不依赖网络；需要在多台电脑间使用时，可以登录服务器开启**端到端加密的云同步**。
 
 > 截图中的所有账号、密码、地址和任务均为演示用的虚构数据。
 
@@ -97,6 +98,17 @@ DevVault 把它们按项目整理在一起，配上一个够用的待办系统�
 - 每日定时推送摘要：今天到期、已逾期的待办，以及即将过期的账号；错过时间会在下次启动后补发
 - 安装版支持开机自启
 
+### 云同步（可选）
+
+在「设置 → 账号与云同步」填写服务器地址后注册或登录，账号密码与待办即可在多台电脑间自动同步：
+
+- **端到端加密**：数据在本机用由主密码派生的密钥加密后才上传，服务器只保存密文，看不到任何账号、密码或待办内容
+- **服务器自选**：可以使用统一提供的服务器，也可以用配套的服务端项目 `dev-vault-server` 一键部署自己的服务器（Docker Compose + MySQL）
+- 修改后几秒内自动同步，另每 2 分钟检查一次其他设备的更新；两台电脑同时修改同一条记录时以较晚的修改为准，删除优先
+- 已有的本地数据在首次登录后自动上传并与云端合并；退出登录不影响本机数据
+- **主密码无法找回**：服务器无法解密数据，也就无法帮你重置
+- 附件暂不同步
+
 ### 安全
 
 - 密码、动态码密钥和敏感字段使用 Windows DPAPI（Electron `safeStorage`）加密后写入数据库
@@ -158,18 +170,20 @@ Set-Content node_modules\electron\path.txt "electron.exe" -NoNewline
 
 ## 数据与隐私
 
-- 所有数据保存在本机：数据库 `%APPDATA%\DevVault\devvault.db`，附件在同目录的 `attachments\` 下（完整路径见「设置 → 数据」）
+- 未登录时所有数据只保存在本机：数据库 `%APPDATA%\DevVault\devvault.db`，附件在同目录的 `attachments\` 下（完整路径见「设置 → 数据」）
 - 密码通过当前 Windows 用户的凭据加密，**直接拷贝数据库到其他电脑或用户后无法解密**；迁移请使用「设置 → 数据」中的导出 / 导入
 - 导出的备份是一个文件夹（`data.json` + `attachments/`），其中密码为**明文**，请妥善保管，不要提交到代码仓库或发到群里；导入时选择 `data.json`，按追加合并，同名项目 / 状态 / 优先级自动复用
 - 附件以原文件保存，**未加密**
 - 自动锁定用于防止离开座位时被他人查看，不等同于对整个数据库加密
+- 开启云同步后，上传的是在本机加密后的密文；服务器能看到的只有登录名、显示名称、记录数量和修改时间（详见服务端项目的 README）
 
 ## 项目结构
 
 ```
 src/
   main/        主进程：窗口与托盘、SQLite（db.ts 迁移 / repo.ts 数据访问）、
-               IPC、加密、附件、提醒、自动锁定、云端客户端
+               IPC、加密、附件、提醒、自动锁定、
+               云端客户端（cloud.ts 登录 / e2ee.ts 端到端加密 / sync.ts 同步）
   preload/     通过 contextBridge 暴露类型安全的 window.api
   shared/      主进程与渲染进程共享的类型
   renderer/    React 界面：主窗口、桌面任务条（widget）、快速搜索（quick）
@@ -177,6 +191,8 @@ resources/     应用与托盘图标
 docs/          服务端接口约定、截图
 ```
 
-## 云端服务（规划中）
+## 服务端
 
-后续计划提供多设备同步、团队共享等需要登录的功能。客户端的登录流程已经实现，服务端接口约定见 [docs/server-api.md](docs/server-api.md)。不登录不影响任何本地功能。
+配套的服务端是独立项目 `dev-vault-server`（Kotlin + Ktor + MySQL，Gradle 多模块），提供注册登录与端到端加密同步，部署方式和配置见该项目的 README。接口与加密协议见 [docs/server-api.md](docs/server-api.md)，按此协议也可以自行实现兼容的服务端。
+
+后续计划在此基础上提供团队共享、云端备份等功能。不登录不影响任何本地功能。

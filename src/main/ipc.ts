@@ -8,7 +8,8 @@ import { assetPath, broadcast, hideQuickWindow, resizeQuickWindow, resizeWidget,
 import { getPrefs, setPrefs } from './prefs'
 import { applyHotkey, updateTrayMenu } from './tray'
 import { configureLock, isLocked, lockNow, lockState, reportActivity, setLockPassword, unlock } from './lock'
-import { cloudState, login, logout } from './cloud'
+import { changePassword, cloudOnly, cloudState, login, logout, register, serverInfo } from './cloud'
+import { scheduleSync, syncNow } from './sync'
 import * as files from './attachments'
 import type {
   AppInfo,
@@ -20,6 +21,7 @@ import type {
   PriorityInput,
   PriorityRemoval,
   ProjectInput,
+  RegisterInput,
   Scope,
   StatusInput,
   TodoInput,
@@ -56,13 +58,23 @@ function handle(channel: string, listener: Listener): void {
   })
 }
 
-/** 包装会修改待办/项目的操作：执行后同步桌面任务条并通知所有窗口刷新 */
+/** 包装会修改待办/项目的操作：执行后同步桌面任务条、通知所有窗口刷新，并安排云同步 */
 function mutating<A extends unknown[], R>(fn: (...args: A) => R | Promise<R>) {
   return async (_e: unknown, ...args: A): Promise<R> => {
     const result = await fn(...args)
     syncWidgets()
     broadcast('todos:changed')
     updateTrayMenu()
+    scheduleSync()
+    return result
+  }
+}
+
+/** 包装只修改账号记录的操作：执行后安排云同步 */
+function syncing<A extends unknown[], R>(fn: (...args: A) => R) {
+  return (_e: unknown, ...args: A): R => {
+    const result = fn(...args)
+    scheduleSync()
     return result
   }
 }
@@ -85,12 +97,15 @@ export function registerIpc(): void {
   handle('stats:get', () => repo.getStats())
 
   handle('entries:list', (_e, q: ListQuery) => repo.listEntries(q))
-  handle('entries:save', (_e, entry: EntryInput) => repo.saveEntry(entry))
-  handle('entries:delete', (_e, id: number) => {
-    repo.deleteEntry(id)
-    gcLater()
-  })
-  handle('entries:favorite', (_e, id: number) => repo.toggleFavorite(id))
+  handle('entries:save', syncing((entry: EntryInput) => repo.saveEntry(entry)))
+  handle(
+    'entries:delete',
+    syncing((id: number) => {
+      repo.deleteEntry(id)
+      gcLater()
+    })
+  )
+  handle('entries:favorite', syncing((id: number) => repo.toggleFavorite(id)))
 
   handle('todos:list', (_e, q: ListQuery) => repo.listTodos(q))
   handle('todos:get', (_e, id: number) => repo.getTodo(id))
@@ -155,6 +170,16 @@ export function registerIpc(): void {
   handle('cloud:state', () => cloudState())
   handle('cloud:login', (_e, server: string, username: string, password: string) => login(server, username, password))
   handle('cloud:logout', () => logout())
+  handle('cloud:register', (_e, input: RegisterInput) => register(input))
+  handle('cloud:serverInfo', (_e, server: string) => serverInfo(server))
+  handle('cloud:changePassword', cloudOnly((current: string, next: string) => changePassword(current, next)))
+  handle(
+    'cloud:sync',
+    cloudOnly(async () => {
+      await syncNow()
+      return cloudState()
+    })
+  )
 
   handle('app:showMain', (_e, target?: NavTarget | NavTarget['page']) => {
     hideQuickWindow()
@@ -227,6 +252,7 @@ export function registerIpc(): void {
     const result = repo.importAll(data, files.importFileFrom(dirname(filePaths[0])))
     syncWidgets()
     broadcast('todos:changed')
+    scheduleSync()
     return result
   })
 }

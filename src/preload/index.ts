@@ -17,7 +17,9 @@ import type {
   PriorityRemoval,
   Project,
   ProjectInput,
+  RegisterInput,
   Scope,
+  ServerInfo,
   StatusInput,
   Stats,
   Todo,
@@ -107,6 +109,10 @@ const api = {
   login: (server: string, username: string, password: string) =>
     invoke<CloudState>('cloud:login', server, username, password),
   logout: () => invoke<CloudState>('cloud:logout'),
+  register: (input: RegisterInput) => invoke<CloudState>('cloud:register', input),
+  serverInfo: (server: string) => invoke<ServerInfo>('cloud:serverInfo', server),
+  changeCloudPassword: (current: string, next: string) => invoke<void>('cloud:changePassword', current, next),
+  syncNow: () => invoke<CloudState>('cloud:sync'),
   onCloudChanged: (cb: (s: CloudState) => void) => subscribe('cloud:changed', cb),
 
   copy: (text: string, clearAfterSec = 0) => invoke<void>('clipboard:copy', text, clearAfterSec),

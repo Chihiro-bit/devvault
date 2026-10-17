@@ -134,7 +134,15 @@ export function Sidebar(props: Props) {
           )}
           <span className="account-text">
             <b>{cloud?.loggedIn && cloud.user ? cloud.user.name : '本地模式'}</b>
-            <small>{cloud?.loggedIn ? '已登录' : '未登录 · 点击登录'}</small>
+            <small>
+              {!cloud?.loggedIn
+                ? '未登录 · 点击登录'
+                : cloud.sync.syncing
+                  ? '同步中…'
+                  : cloud.sync.error
+                    ? '同步失败'
+                    : '已登录 · 已加密同步'}
+            </small>
           </span>
         </button>
         {props.canLock && (
